@@ -69,7 +69,7 @@ async def handle_membership_event(event_type: str, data: dict):
     joined_str     = format_date(joined_at_raw)
     event_date_str = format_date(event_date_raw)
 
-    is_past_due    = event_type == "membership.went_past_due"
+    is_past_due    = event_type in ("invoice_past_due", "membership_deactivated_past_due")
     event_label    = "Past Due Date" if is_past_due else "Cancellation Date"
     ticket_title   = "Payment Failure" if is_past_due else "Cancellation"
     action_label   = "Update Payment" if is_past_due else "Resubscribe"
@@ -188,7 +188,7 @@ def whop_webhook():
 
     print(f"Received event: {event_type}")
 
-    if event_type in ("membership.went_past_due", "membership.cancelled"):
+    if event_type in ("membership_deactivated", "invoice_past_due", "membership_cancel_at_period_end_changed"):
         asyncio.run_coroutine_threadsafe(
             handle_membership_event(event_type, data),
             bot.loop
