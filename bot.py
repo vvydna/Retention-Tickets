@@ -173,6 +173,27 @@ async def handle_membership_event(event_type: str, data: dict):
     print(f"Ticket created: {thread_name} ({event_type})")
 
 
+# ── Manual !ticket command ────────────────────────────────────────────────────
+@bot.command(name="ticket")
+@commands.has_role("Owner")
+async def manual_ticket(ctx, member: discord.Member, event_type: str = "cancelled"):
+    """Usage: !ticket @user cancelled  OR  !ticket @user past_due"""
+    await ctx.message.delete()
+    is_past_due = event_type == "past_due"
+    fake_data = {
+        "user": {
+            "discord_id": str(member.id),
+            "username": member.name,
+        },
+        "joined_at": member.joined_at.timestamp() if member.joined_at else None,
+        "canceled_at": datetime.utcnow().timestamp(),
+        "manage_url": CHECKOUT_URL
+    }
+    event = "invoice_past_due" if is_past_due else "membership_deactivated"
+    await handle_membership_event(event, fake_data)
+    await ctx.send(f"Ticket created for {member.mention}", delete_after=5)
+
+
 # ── Flask webhook endpoint ────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def whop_webhook():
@@ -224,3 +245,4 @@ threading.Thread(target=run_flask, daemon=True).start()
 
 # ── Run bot ───────────────────────────────────────────────────────────────────
 bot.run(DISCORD_TOKEN)
+
