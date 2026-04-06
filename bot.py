@@ -26,6 +26,7 @@ PORT                 = int(os.getenv("PORT", 8080))
 
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 app = Flask(__name__)
 
@@ -245,4 +246,3 @@ threading.Thread(target=run_flask, daemon=True).start()
 
 # ── Run bot ───────────────────────────────────────────────────────────────────
 bot.run(DISCORD_TOKEN)
-
