@@ -153,16 +153,30 @@ async def handle_membership_event(event_type: str, data: dict):
             await interaction.response.send_message("Closing ticket...", ephemeral=True)
             await interaction.channel.delete()
 
-    # ── Create thread ────────────────────────────────────────────────────────
+    # ── Create private thread ─────────────────────────────────────────────────
     thread_name = username
     thread = await ticket_channel.create_thread(
         name=thread_name,
-        type=discord.ChannelType.public_thread,
+        type=discord.ChannelType.private_thread,
+        invitable=False,
         reason=f"Whop {event_type}"
     )
 
-    # Ping member + staff role
+    # Add member and staff to thread
     staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE_NAME)
+    if member:
+        await thread.add_user(member)
+
+    # Add all members with staff role to thread
+    if staff_role:
+        for m in guild.members:
+            if staff_role in m.roles and not m.bot:
+                try:
+                    await thread.add_user(m)
+                except Exception:
+                    pass
+
+    # Ping member + staff role
     ping_parts = []
     if member:
         ping_parts.append(member.mention)
