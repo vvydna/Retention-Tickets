@@ -219,10 +219,11 @@ def whop_webhook():
         return jsonify({"error": "Invalid signature"}), 401
 
     body       = request.get_json(force=True) or {}
-    event_type = body.get("event") or body.get("type") or ""
-    data       = body.get("data") or {}
+    event_type = body.get("event") or body.get("type") or body.get("action") or ""
+    data       = body.get("data") or body.get("membership") or body.get("invoice") or body
 
     print(f"Received event: {event_type}")
+    print(f"Full payload: {body}")
 
     if event_type in ("membership_deactivated", "invoice_past_due", "membership_cancel_at_period_end_changed"):
         asyncio.run_coroutine_threadsafe(
@@ -260,3 +261,4 @@ threading.Thread(target=run_flask, daemon=True).start()
 
 # ── Run bot ───────────────────────────────────────────────────────────────────
 bot.run(DISCORD_TOKEN)
+
