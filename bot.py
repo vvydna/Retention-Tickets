@@ -2,6 +2,8 @@ import discord
 from discord.ext import commands
 import asyncio
 import os
+import urllib.request
+import json
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import threading
@@ -14,6 +16,7 @@ load_dotenv()
 # ── Config ──────────────────────────────────────────────────────────────────
 DISCORD_TOKEN        = os.getenv("DISCORD_TOKEN")
 WHOP_WEBHOOK_SECRET  = os.getenv("WHOP_WEBHOOK_SECRET")
+WHOP_API_KEY         = os.getenv("WHOP_API_KEY", "")
 GUILD_ID             = int(os.getenv("GUILD_ID"))
 TICKET_CATEGORY_ID   = int(os.getenv("TICKET_CATEGORY_ID"))
 PREMIUM_ROLE_ID      = int(os.getenv("PREMIUM_ROLE_ID"))
@@ -34,7 +37,7 @@ app = Flask(__name__)
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def verify_whop_signature(payload: bytes, sig_header: str) -> bool:
     if not WHOP_WEBHOOK_SECRET or not sig_header:
-        return True  # skip verification if secret not set (dev mode)
+        return True
     expected = hmac.new(
         WHOP_WEBHOOK_SECRET.encode(), payload, hashlib.sha256
     ).hexdigest()
@@ -52,6 +55,25 @@ def format_date(ts) -> str:
         return str(ts)
 
 
+def lookup_discord_id(whop_user_id: str) -> str:
+    """Call Whop API to get discord_id for a user."""
+    if not WHOP_API_KEY or not whop_user_id:
+        return ""
+    try:
+        req = urllib.request.Request(
+            f"https://api.whop.com/api/v2/users/{whop_user_id}",
+            headers={"Authorization": f"Bearer {WHOP_API_KEY}"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            user_info = json.loads(resp.read())
+            discord_id = user_info.get("discord_id") or ""
+            print(f"Whop API lookup: whop_user={whop_user_id} discord_id={discord_id}")
+            return discord_id
+    except Exception as e:
+        print(f"Whop API lookup failed: {e}")
+        return ""
+
+
 async def handle_membership_event(event_type: str, data: dict):
     """Core logic — runs in the bot's event loop."""
     guild = bot.get_guild(GUILD_ID)
@@ -61,11 +83,16 @@ async def handle_membership_event(event_type: str, data: dict):
 
     # ── Pull user info from payload ──────────────────────────────────────────
     user_data      = data.get("user") or {}
-    discord_id_str = user_data.get("discord_id") or user_data.get("id") or ""
+    whop_user_id   = user_data.get("id") or ""
+    discord_id_str = user_data.get("discord_id") or ""
     username       = user_data.get("username") or user_data.get("name") or "Unknown"
     joined_at_raw  = data.get("joined_at") or data.get("created_at")
-    event_date_raw = data.get("canceled_at") or data.get("updated_at")
+    event_date_raw = data.get("canceled_at") or data.get("due_date") or data.get("updated_at")
     manage_url     = data.get("manage_url") or CHECKOUT_URL
+
+    # ── Look up Discord ID from Whop API if not in payload ───────────────────
+    if not discord_id_str and whop_user_id:
+        discord_id_str = lookup_discord_id(whop_user_id)
 
     joined_str     = format_date(joined_at_raw)
     event_date_str = format_date(event_date_raw)
@@ -76,11 +103,11 @@ async def handle_membership_event(event_type: str, data: dict):
     action_label   = "Update Payment" if is_past_due else "Resubscribe"
     action_url     = manage_url if is_past_due else CHECKOUT_URL
     description    = (
-        f"We've noticed your subscription payment has failed. "
-        f"Please update your payment method to restore access."
+        "We've noticed your subscription payment has failed. "
+        "Please update your payment method to restore access."
         if is_past_due else
-        f"Your Scale Resell membership has been cancelled. "
-        f"We'd love to have you back — click below to resubscribe."
+        "Your Scale Resell membership has been cancelled. "
+        "We'd love to have you back — click below to resubscribe."
     )
 
     # ── Find Discord member ──────────────────────────────────────────────────
@@ -114,14 +141,13 @@ async def handle_membership_event(event_type: str, data: dict):
         print("Ticket category not found")
         return
 
-    # ── Create thread inside #cancellation channel ───────────────────────────
+    # ── Find cancellation channel ────────────────────────────────────────────
     ticket_channel = None
     for ch in category.channels:
         if "cancellation" in ch.name.lower() or "ticket" in ch.name.lower():
             ticket_channel = ch
             break
     if not ticket_channel:
-        # fallback: first text channel in category
         for ch in category.channels:
             if isinstance(ch, discord.TextChannel):
                 ticket_channel = ch
@@ -137,10 +163,10 @@ async def handle_membership_event(event_type: str, data: dict):
         color=EMBED_COLOR,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Member",        value=username,       inline=True)
-    embed.add_field(name="Join Date",     value=joined_str,     inline=True)
-    embed.add_field(name=event_label,     value=event_date_str, inline=True)
-    embed.add_field(name=action_label,    value=f"[Click Here]({action_url})", inline=False)
+    embed.add_field(name="Member",     value=username,       inline=True)
+    embed.add_field(name="Join Date",  value=joined_str,     inline=True)
+    embed.add_field(name=event_label,  value=event_date_str, inline=True)
+    embed.add_field(name=action_label, value=f"[Click Here]({action_url})", inline=False)
     embed.set_footer(text="Scale Resell | Support")
 
     # ── Close ticket button ──────────────────────────────────────────────────
@@ -167,7 +193,6 @@ async def handle_membership_event(event_type: str, data: dict):
     if member:
         await thread.add_user(member)
 
-    # Add all members with staff role to thread
     if staff_role:
         for m in guild.members:
             if staff_role in m.roles and not m.bot:
@@ -176,7 +201,6 @@ async def handle_membership_event(event_type: str, data: dict):
                 except Exception:
                     pass
 
-    # Ping member + staff role
     ping_parts = []
     if member:
         ping_parts.append(member.mention)
@@ -194,7 +218,6 @@ async def handle_membership_event(event_type: str, data: dict):
 async def manual_ticket(ctx, member: discord.Member, event_type: str = "cancelled"):
     """Usage: !ticket @user cancelled  OR  !ticket @user past_due"""
     await ctx.message.delete()
-    is_past_due = event_type == "past_due"
     fake_data = {
         "user": {
             "discord_id": str(member.id),
@@ -204,7 +227,7 @@ async def manual_ticket(ctx, member: discord.Member, event_type: str = "cancelle
         "canceled_at": datetime.utcnow().timestamp(),
         "manage_url": CHECKOUT_URL
     }
-    event = "invoice_past_due" if is_past_due else "membership_deactivated"
+    event = "invoice_past_due" if event_type == "past_due" else "membership_deactivated"
     await handle_membership_event(event, fake_data)
     await ctx.send(f"Ticket created for {member.mention}", delete_after=5)
 
@@ -212,8 +235,8 @@ async def manual_ticket(ctx, member: discord.Member, event_type: str = "cancelle
 # ── Flask webhook endpoint ────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def whop_webhook():
-    payload   = request.get_data()
-    sig       = request.headers.get("X-Whop-Signature", "")
+    payload = request.get_data()
+    sig     = request.headers.get("X-Whop-Signature", "")
 
     if not verify_whop_signature(payload, sig):
         return jsonify({"error": "Invalid signature"}), 401
@@ -242,7 +265,6 @@ async def on_ready():
 
 
 class PersistentCloseView(discord.ui.View):
-    """Persistent view so Close Ticket button works after bot restarts."""
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -258,7 +280,5 @@ def run_flask():
 
 
 threading.Thread(target=run_flask, daemon=True).start()
-
-# ── Run bot ───────────────────────────────────────────────────────────────────
 bot.run(DISCORD_TOKEN)
 
