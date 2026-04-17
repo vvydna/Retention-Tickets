@@ -34,7 +34,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 app = Flask(__name__)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
 def verify_whop_signature(payload: bytes, sig_header: str) -> bool:
     if not WHOP_WEBHOOK_SECRET or not sig_header:
         return True
@@ -56,7 +55,6 @@ def format_date(ts) -> str:
 
 
 def lookup_discord_id(whop_user_id: str) -> str:
-    """Call Whop API to get discord_id for a user."""
     if not WHOP_API_KEY or not whop_user_id:
         return ""
     try:
@@ -75,13 +73,11 @@ def lookup_discord_id(whop_user_id: str) -> str:
 
 
 async def handle_membership_event(event_type: str, data: dict):
-    """Core logic — runs in the bot's event loop."""
     guild = bot.get_guild(GUILD_ID)
     if not guild:
         print("Guild not found")
         return
 
-    # ── Pull user info from payload ──────────────────────────────────────────
     user_data      = data.get("user") or {}
     whop_user_id   = user_data.get("id") or ""
     discord_id_str = user_data.get("discord_id") or ""
@@ -90,7 +86,6 @@ async def handle_membership_event(event_type: str, data: dict):
     event_date_raw = data.get("canceled_at") or data.get("due_date") or data.get("updated_at")
     manage_url     = data.get("manage_url") or CHECKOUT_URL
 
-    # ── Look up Discord ID from Whop API if not in payload ───────────────────
     if not discord_id_str and whop_user_id:
         discord_id_str = lookup_discord_id(whop_user_id)
 
@@ -110,7 +105,6 @@ async def handle_membership_event(event_type: str, data: dict):
         "We'd love to have you back — click below to resubscribe."
     )
 
-    # ── Find Discord member ──────────────────────────────────────────────────
     member = None
     if discord_id_str:
         try:
@@ -120,7 +114,6 @@ async def handle_membership_event(event_type: str, data: dict):
         except Exception as e:
             print(f"Could not fetch member {discord_id_str}: {e}")
 
-    # ── Role changes ─────────────────────────────────────────────────────────
     premium_role  = guild.get_role(PREMIUM_ROLE_ID)
     past_due_role = guild.get_role(PAST_DUE_ROLE_ID)
 
@@ -135,13 +128,11 @@ async def handle_membership_event(event_type: str, data: dict):
         except Exception as e:
             print(f"Role error: {e}")
 
-    # ── Find ticket category ─────────────────────────────────────────────────
     category = guild.get_channel(TICKET_CATEGORY_ID)
     if not category or not isinstance(category, discord.CategoryChannel):
         print("Ticket category not found")
         return
 
-    # ── Find cancellation channel ────────────────────────────────────────────
     ticket_channel = None
     for ch in category.channels:
         if "cancellation" in ch.name.lower() or "ticket" in ch.name.lower():
@@ -156,7 +147,6 @@ async def handle_membership_event(event_type: str, data: dict):
         print("No suitable channel found in ticket category")
         return
 
-    # ── Build embed ──────────────────────────────────────────────────────────
     embed = discord.Embed(
         title=ticket_title,
         description=description,
@@ -169,7 +159,6 @@ async def handle_membership_event(event_type: str, data: dict):
     embed.add_field(name=action_label, value=f"[Click Here]({action_url})", inline=False)
     embed.set_footer(text="Scale Resell | Support")
 
-    # ── Close ticket button ──────────────────────────────────────────────────
     class CloseButton(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=None)
@@ -179,7 +168,6 @@ async def handle_membership_event(event_type: str, data: dict):
             await interaction.response.send_message("Closing ticket...", ephemeral=True)
             await interaction.channel.delete()
 
-    # ── Create private thread ─────────────────────────────────────────────────
     thread_name = username
     thread = await ticket_channel.create_thread(
         name=thread_name,
@@ -188,7 +176,6 @@ async def handle_membership_event(event_type: str, data: dict):
         reason=f"Whop {event_type}"
     )
 
-    # Add member and staff to thread
     staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE_NAME)
     if member:
         await thread.add_user(member)
@@ -212,11 +199,9 @@ async def handle_membership_event(event_type: str, data: dict):
     print(f"Ticket created: {thread_name} ({event_type})")
 
 
-# ── Manual !ticket command ────────────────────────────────────────────────────
 @bot.command(name="ticket")
 @commands.has_role("Owner")
 async def manual_ticket(ctx, member: discord.Member, event_type: str = "cancelled"):
-    """Usage: !ticket @user cancelled  OR  !ticket @user past_due"""
     await ctx.message.delete()
     fake_data = {
         "user": {
@@ -232,7 +217,6 @@ async def manual_ticket(ctx, member: discord.Member, event_type: str = "cancelle
     await ctx.send(f"Ticket created for {member.mention}", delete_after=5)
 
 
-# ── Flask webhook endpoint ────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def whop_webhook():
     payload = request.get_data()
@@ -242,8 +226,8 @@ def whop_webhook():
         return jsonify({"error": "Invalid signature"}), 401
 
     body       = request.get_json(force=True) or {}
-    event_type = body.get("event") or body.get("type") or body.get("action") or ""
-    data       = body.get("data") or body.get("membership") or body.get("invoice") or body
+    event_type = (body.get("event") or body.get("type") or body.get("action") or "").replace(".", "_")
+    data       = body.get("data") or body
 
     print(f"Received event: {event_type}")
     print(f"Full payload: {body}")
@@ -257,7 +241,6 @@ def whop_webhook():
     return jsonify({"status": "ok"}), 200
 
 
-# ── Bot events ────────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
     print(f"Bot ready: {bot.user} | Guild ID: {GUILD_ID}")
@@ -274,11 +257,9 @@ class PersistentCloseView(discord.ui.View):
         await interaction.channel.delete()
 
 
-# ── Start Flask in background thread ─────────────────────────────────────────
 def run_flask():
     app.run(host="0.0.0.0", port=PORT)
 
 
 threading.Thread(target=run_flask, daemon=True).start()
 bot.run(DISCORD_TOKEN)
-
