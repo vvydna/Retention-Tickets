@@ -59,7 +59,7 @@ def lookup_discord_id(whop_user_id: str) -> str:
         return ""
     try:
         req = urllib.request.Request(
-            f"https://api.whop.com/v5/users/{whop_user_id}",
+            f"https://api.whop.com/api/v5/users/{whop_user_id}",
             headers={"Authorization": f"Bearer {WHOP_API_KEY}"}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
